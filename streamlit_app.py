@@ -143,7 +143,7 @@ def display_module_stats(module_stats):
 # Streamlit app
 st.title('Version Popularity Chart (Grouped by Buckets)')
 
-uploaded_file = st.file_uploader('Upload a JSON file', type='json')
+uploaded_file = st.file_uploader('Upload a JSON file eg https://github.com/prebid/prebid-integration-monitor/blob/main/output/10k.json', type='json')
 
 if uploaded_file is not None:
     data = load_json(uploaded_file)
