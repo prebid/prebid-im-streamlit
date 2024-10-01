@@ -91,6 +91,8 @@ def classify_module(module_name):
         return 'RTD Module'
     elif 'IdSystem' in module_name or 'userId' in module_name:
         return 'ID System'
+    elif 'Analytics' in module_name or 'analyticsAdapter' in module_name:
+        return 'Analytics Adapter'
     else:
         return 'Other'
 
@@ -100,6 +102,7 @@ def extract_module_stats(data):
         'Bid Adapter': Counter(),
         'RTD Module': Counter(),
         'ID System': Counter(),
+        'Analytics Adapter': Counter(),
         'Other': Counter()
     }
 
