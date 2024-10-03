@@ -85,13 +85,14 @@ def categorize_version(version):
 
 # Classify modules by type
 def classify_module(module_name):
-    if 'BidAdapter' in module_name:
+    module_name_lower = module_name.lower()
+    if 'bidadapter' in module_name_lower or 'bidadapter' in module_name_lower:
         return 'Bid Adapter'
-    elif 'RtdProvider' in module_name or 'rtdModule' in module_name:
+    elif 'rtdprovider' in module_name_lower or 'rtdmodule' in module_name_lower:
         return 'RTD Module'
-    elif 'IdSystem' in module_name or 'userId' in module_name:
+    elif 'idsystem' in module_name_lower or 'userid' in module_name_lower:
         return 'ID System'
-    elif 'Analytics' in module_name or 'analyticsAdapter' in module_name:
+    elif 'analytics' in module_name_lower or 'analyticsadapter' in module_name_lower:
         return 'Analytics Adapter'
     else:
         return 'Other'
@@ -107,9 +108,18 @@ def extract_module_stats(data):
     }
 
     for item in data:
-        # Safely get the 'modules' list or return an empty list if the key is missing
-        modules = item.get('modules', [])
-        for module in modules:
+        modules_list = []
+        if 'prebidInstances' in item:
+            prebid_instances = item.get('prebidInstances', [])
+            for instance in prebid_instances:
+                modules = instance.get('modules', [])
+                modules_list.extend(modules)
+        else:
+            # Fallback to prior data structure
+            modules = item.get('modules', [])
+            modules_list.extend(modules)
+        
+        for module in modules_list:
             category = classify_module(module)
             module_counter[category][module] += 1
 
@@ -117,23 +127,40 @@ def extract_module_stats(data):
 
 # Create a bar chart of the version buckets
 def create_version_chart(data):
-    # Extract and categorize versions
-    version_buckets = [categorize_version(item['version']) for item in data]
-    
+    version_buckets = []
+
+    for item in data:
+        if 'prebidInstances' in item:
+            prebid_instances = item.get('prebidInstances', [])
+            for instance in prebid_instances:
+                version = instance.get('version', '')
+                if version:
+                    bucket = categorize_version(version)
+                    version_buckets.append(bucket)
+        else:
+            # Fallback to prior data structure
+            version = item.get('version', '')
+            if version:
+                bucket = categorize_version(version)
+                version_buckets.append(bucket)
+
     # Create a DataFrame and count occurrences of each version bucket
-    version_counts = pd.Series(version_buckets).value_counts().sort_index()
+    if version_buckets:
+        version_counts = pd.Series(version_buckets).value_counts().sort_index()
 
-    # Plot the bar chart
-    fig, ax = plt.subplots()
-    version_counts.plot(kind='bar', ax=ax)
-    ax.set_xlabel('Version Buckets')
-    ax.set_ylabel('Number of URLs')
-    ax.set_title('Number of URLs per Version Bucket')
-    plt.xticks(rotation=45)
-    st.pyplot(fig)
+        # Plot the bar chart
+        fig, ax = plt.subplots()
+        version_counts.plot(kind='bar', ax=ax)
+        ax.set_xlabel('Version Buckets')
+        ax.set_ylabel('Number of Instances')
+        ax.set_title('Number of Prebid.js Instances per Version Bucket')
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
 
-    # Display the total number of sites
-    st.write(f"Total Number of Sites: {len(data)}")
+        # Display the total number of instances
+        st.write(f"Total Number of Prebid.js Instances: {len(version_buckets)}")
+    else:
+        st.write("No Prebid.js version information available.")
 
 # Function to display module statistics
 def display_module_stats(module_stats):
@@ -143,18 +170,67 @@ def display_module_stats(module_stats):
         df = df.sort_values(by='Count', ascending=False).reset_index(drop=True)
         st.table(df)
 
-# Streamlit app
-st.title('Version Popularity Chart (Grouped by Buckets)')
+# Function to create a plot for the popularity of other libraries
+def create_libraries_chart(data):
+    libraries_list = []
 
-uploaded_file = st.file_uploader('Upload a JSON file eg https://github.com/prebid/prebid-integration-monitor/blob/main/output/10k.json', type='json')
+    for item in data:
+        libraries = item.get('libraries', [])
+        libraries_list.extend(libraries)
+
+    if libraries_list:
+        library_counts = pd.Series(libraries_list).value_counts().sort_values(ascending=False)
+
+        # Plot the bar chart
+        fig, ax = plt.subplots()
+        library_counts.plot(kind='bar', ax=ax)
+        ax.set_xlabel('Libraries')
+        ax.set_ylabel('Number of URLs')
+        ax.set_title('Popularity of Other Libraries Detected')
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
+
+        # Display the total number of URLs
+        st.write(f"Total Number of URLs: {len(data)}")
+    else:
+        st.write("No libraries information available.")
+
+# Streamlit app
+st.title('Prebid.js and Libraries Analysis')
+
+uploaded_file = st.file_uploader('Upload a JSON file', type='json')
 
 if uploaded_file is not None:
     data = load_json(uploaded_file)
     if data:  # Proceed only if there is valid data
-        # Filter out entries with more than 300 modules
-        filtered_data = [item for item in data if len(item.get('modules', [])) <= 300]
+        # Filter out entries with more than 300 modules in any instance
+        filtered_data = []
+        for item in data:
+            include_item = True
+            modules_list = []
+            if 'prebidInstances' in item:
+                prebid_instances = item.get('prebidInstances', [])
+                for instance in prebid_instances:
+                    if len(instance.get('modules', [])) > 300:
+                        include_item = False
+                        break
+                    modules_list.extend(instance.get('modules', []))
+            else:
+                # Fallback to prior data structure
+                if len(item.get('modules', [])) > 300:
+                    include_item = False
+                modules_list.extend(item.get('modules', []))
+            if include_item:
+                filtered_data.append(item)
+
+        st.header('Version Popularity Chart (Grouped by Buckets)')
         create_version_chart(filtered_data)
+
+        st.header('Module Statistics')
         module_stats = extract_module_stats(filtered_data)
         display_module_stats(module_stats)
+
+        st.header('Popularity of Other Libraries Detected')
+        create_libraries_chart(filtered_data)
     else:
         st.write("No valid data found in the uploaded file.")
