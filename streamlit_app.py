@@ -132,6 +132,9 @@ def create_version_chart(data):
     plt.xticks(rotation=45)
     st.pyplot(fig)
 
+    # Display the total number of sites
+    st.write(f"Total Number of Sites: {len(data)}")
+
 # Function to display module statistics
 def display_module_stats(module_stats):
     for category, counter in module_stats.items():
@@ -148,8 +151,10 @@ uploaded_file = st.file_uploader('Upload a JSON file eg https://github.com/prebi
 if uploaded_file is not None:
     data = load_json(uploaded_file)
     if data:  # Proceed only if there is valid data
-        create_version_chart(data)
-        module_stats = extract_module_stats(data)
+        # Filter out entries with more than 300 modules
+        filtered_data = [item for item in data if len(item.get('modules', [])) <= 300]
+        create_version_chart(filtered_data)
+        module_stats = extract_module_stats(filtered_data)
         display_module_stats(module_stats)
     else:
         st.write("No valid data found in the uploaded file.")
