@@ -85,7 +85,7 @@ def categorize_version(version):
 
 # Classify modules by type
 def classify_module(module_name):
-    if 'BidAdapter' in module_name:
+    if 'BidAdapter' in module_name or 'BidAdapter' in module_name:
         return 'Bid Adapter'
     elif 'RtdProvider' in module_name or 'rtdModule' in module_name:
         return 'RTD Module'
@@ -95,6 +95,33 @@ def classify_module(module_name):
         return 'Analytics Adapter'
     else:
         return 'Other'
+
+# Function to extract versions from an item
+def extract_versions(item):
+    versions = []
+    if 'version' in item:
+        versions.append(item['version'])
+    if 'prebidInstances' in item:
+        for instance in item['prebidInstances']:
+            if 'version' in instance:
+                versions.append(instance['version'])
+    return versions
+
+# Function to extract modules from an item
+def extract_modules(item):
+    modules = []
+    if 'modules' in item:
+        modules.extend(item['modules'])
+    if 'prebidInstances' in item:
+        for instance in item['prebidInstances']:
+            if 'modules' in instance:
+                modules.extend(instance['modules'])
+    return modules
+
+# Function to count total modules in an item
+def count_modules(item):
+    modules = extract_modules(item)
+    return len(modules)
 
 # Function to extract and classify modules
 def extract_module_stats(data):
@@ -107,8 +134,7 @@ def extract_module_stats(data):
     }
 
     for item in data:
-        # Safely get the 'modules' list or return an empty list if the key is missing
-        modules = item.get('modules', [])
+        modules = extract_modules(item)
         for module in modules:
             category = classify_module(module)
             module_counter[category][module] += 1
@@ -118,8 +144,13 @@ def extract_module_stats(data):
 # Create a bar chart of the version buckets
 def create_version_chart(data):
     # Extract and categorize versions
-    version_buckets = [categorize_version(item['version']) for item in data]
-    
+    version_buckets = []
+    for item in data:
+        versions = extract_versions(item)
+        for version in versions:
+            version_bucket = categorize_version(version)
+            version_buckets.append(version_bucket)
+
     # Create a DataFrame and count occurrences of each version bucket
     version_counts = pd.Series(version_buckets).value_counts().sort_index()
 
@@ -146,13 +177,13 @@ def display_module_stats(module_stats):
 # Streamlit app
 st.title('Version Popularity Chart (Grouped by Buckets)')
 
-uploaded_file = st.file_uploader('Upload a JSON file eg https://github.com/prebid/prebid-integration-monitor/blob/main/output/10k.json', type='json')
+uploaded_file = st.file_uploader('Upload a JSON file', type='json')
 
 if uploaded_file is not None:
     data = load_json(uploaded_file)
     if data:  # Proceed only if there is valid data
         # Filter out entries with more than 300 modules
-        filtered_data = [item for item in data if len(item.get('modules', [])) <= 300]
+        filtered_data = [item for item in data if count_modules(item) <= 300]
         create_version_chart(filtered_data)
         module_stats = extract_module_stats(filtered_data)
         display_module_stats(module_stats)
