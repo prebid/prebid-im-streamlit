@@ -1,9 +1,13 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import json
 import re
 from collections import Counter
+
+# Disable math text parsing globally
+mpl.rcParams['text.usetex'] = False
 
 # Load the JSON data from the uploaded file
 def load_json(file):
@@ -222,7 +226,7 @@ def create_library_chart(data):
     
     if all_libraries:
         library_counts = pd.Series(all_libraries).value_counts().sort_values(ascending=False)
-    
+
         # Plot the bar chart
         fig, ax = plt.subplots(figsize=(10, 6))
         library_counts.plot(kind='bar', ax=ax)
@@ -240,13 +244,23 @@ def create_global_var_name_chart(data):
     if global_var_names:
         global_var_name_counts = pd.Series(global_var_names).value_counts().sort_values(ascending=False)
         
+        # Escape underscores in labels
+        escaped_labels = [name.replace('_', r'\_') for name in global_var_name_counts.index]
+        
         # Plot the bar chart
         fig, ax = plt.subplots(figsize=(10, 6))
         global_var_name_counts.plot(kind='bar', ax=ax)
         ax.set_xlabel('Prebid Global Object Names')
         ax.set_ylabel('Number of Sites')
         ax.set_title('Popularity of Prebid Global Object Names')
-        plt.xticks(rotation=45)
+        
+        # Rotate x-axis labels and set them with escaped labels
+        ax.set_xticklabels(escaped_labels, rotation=45, ha='right')
+        
+        # Disable math text parsing for x-axis labels
+        for label in ax.get_xticklabels():
+            label.set_text(label.get_text())
+        
         st.pyplot(fig)
     else:
         st.write("No Prebid global variable names found to plot.")
