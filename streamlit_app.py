@@ -5,10 +5,26 @@ import matplotlib as mpl
 import json
 import re
 from collections import Counter
+import requests
 
 # Disable math text parsing globally
 mpl.rcParams['text.usetex'] = False
 mpl.rcParams['mathtext.default'] = 'regular'
+
+# Load the JSON data from a URL
+@st.cache_data
+def load_json_from_url(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as e:
+        st.error(f"Error fetching data from URL: {e}")
+        return None
+    except json.JSONDecodeError:
+        st.error("The data fetched is not a valid JSON.")
+        return None
+    return data
 
 # Load the JSON data from the uploaded file
 def load_json(file):
@@ -20,7 +36,7 @@ def load_json(file):
         return None
     return data
 
-# Updated function to categorize versions into broader buckets
+# Function to categorize versions into broader buckets
 def categorize_version(version):
     # Remove leading 'v' if present
     if version.startswith('v'):
@@ -195,14 +211,14 @@ def create_version_chart(data):
 # Create a bar chart of Prebid instances per site
 def create_prebid_instance_chart(data):
     prebid_instance_counts = [count_prebid_instances(item) for item in data]
-    
+
     # Adjust labels and bins to include zero instances
     labels = ['0', '1', '2', '3', '4', '5', '6+']
     bins = [-0.1, 0,1,2,3,4,5,float('inf')]  # Start from -0.1 to include zero counts properly
-    
+
     binned_counts = pd.cut(prebid_instance_counts, bins=bins, right=True, labels=labels)
     prebid_instance_distribution = binned_counts.value_counts().sort_index()
-    
+
     # Plot the bar chart
     fig, ax = plt.subplots()
     ax.bar(prebid_instance_distribution.index.astype(str), prebid_instance_distribution.values)
@@ -218,7 +234,7 @@ def create_library_chart(data):
     for item in data:
         libraries = extract_libraries(item)
         all_libraries.extend(libraries)
-    
+
     if all_libraries:
         library_counts = pd.Series(all_libraries).value_counts().sort_values(ascending=False)
 
@@ -257,39 +273,39 @@ def create_library_chart(data):
 # Create a bar chart of Prebid global object name popularity
 def create_global_var_name_chart(data):
     import matplotlib.ticker as ticker
-    
+
     global_var_names = extract_global_var_names(data)
     if global_var_names:
         # Count occurrences of each global variable name
         global_var_name_counts = pd.Series(global_var_names).value_counts().sort_values(ascending=False)
-        
+
         # Escape special characters in labels
         def escape_label(label):
             special_chars = ['_', '$', '%', '&', '#', '{', '}', '~', '^', '\\']
             for char in special_chars:
                 label = label.replace(char, f'\\{char}')
             return label
-        
+
         escaped_labels = [escape_label(name) for name in global_var_name_counts.index]
-        
+
         # Plot the bar chart using Matplotlib directly
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.bar(range(len(global_var_name_counts)), global_var_name_counts.values)
         ax.set_xlabel('Prebid Global Object Names')
         ax.set_ylabel('Number of Sites')
         ax.set_title('Popularity of Prebid Global Object Names')
-        
+
         # Set x-axis labels with proper alignment
         ax.set_xticks(range(len(escaped_labels)))
         ax.set_xticklabels(escaped_labels, rotation=45, ha='right')
-        
+
         # Use FixedFormatter to prevent automatic formatting
         ax.xaxis.set_major_formatter(ticker.FixedFormatter(escaped_labels))
-        
+
         # Ensure labels are treated as plain text
         for label in ax.get_xticklabels():
             label.set_text(label.get_text())
-        
+
         st.pyplot(fig)
     else:
         st.write("No Prebid global variable names found to plot.")
@@ -317,23 +333,56 @@ def display_module_stats(module_site_stats, module_instance_stats, sites_with_pr
 # Streamlit app
 st.title('Prebid Analysis Dashboard')
 
-uploaded_file = st.file_uploader('Upload a JSON file', type='json')
+# Default JSON data URL
+default_json_url = 'https://raw.githubusercontent.com/prebid/prebid-integration-monitor/main/output/results.json'
+
+# Load default JSON data from URL
+@st.cache_data
+def load_default_json(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as e:
+        st.error(f"Error fetching data from URL: {e}")
+        return None
+    except json.JSONDecodeError:
+        st.error("The data fetched is not a valid JSON.")
+        return None
+    return data
+
+# Load default data
+data = load_default_json(default_json_url)
+if data is None:
+    st.stop()
+
+# File uploader for user to upload a JSON file
+uploaded_file = st.file_uploader('Upload a JSON file (optional)', type='json')
 
 if uploaded_file is not None:
+    # If user uploaded a file, use that data
     data = load_json(uploaded_file)
-    if data:  # Proceed only if there is valid data
-        # Filter out entries with more than 300 modules
-        filtered_data = [item for item in data if count_modules(item) <= 300]
-
-        # Calculate total sites with Prebid.js
-        sites_with_prebid = sum(1 for item in filtered_data if count_prebid_instances(item) > 0)
-
-        create_version_chart(filtered_data)
-        create_prebid_instance_chart(filtered_data)
-        create_library_chart(filtered_data)
-        create_global_var_name_chart(filtered_data)
-
-        module_site_stats, module_instance_stats, total_prebid_instances = extract_module_stats(filtered_data)
-        display_module_stats(module_site_stats, module_instance_stats, sites_with_prebid, total_prebid_instances)
+    if data is None:
+        st.stop()
     else:
-        st.write("No valid data found in the uploaded file.")
+        st.write("Using uploaded data.")
+else:
+    st.write("Using default data from Prebid Integration Monitor.")
+
+# Proceed with the rest of the code using `data`
+if data:
+    # Filter out entries with more than 300 modules
+    filtered_data = [item for item in data if count_modules(item) <= 300]
+
+    # Calculate total sites with Prebid.js
+    sites_with_prebid = sum(1 for item in filtered_data if count_prebid_instances(item) > 0)
+
+    create_version_chart(filtered_data)
+    create_prebid_instance_chart(filtered_data)
+    create_library_chart(filtered_data)
+    create_global_var_name_chart(filtered_data)
+
+    module_site_stats, module_instance_stats, total_prebid_instances = extract_module_stats(filtered_data)
+    display_module_stats(module_site_stats, module_instance_stats, sites_with_prebid, total_prebid_instances)
+else:
+    st.write("No valid data available for processing.")
