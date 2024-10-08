@@ -176,21 +176,36 @@ def extract_module_stats(data):
         'Other': Counter()
     }
 
-    for item in data:
-        modules = extract_modules(item)
-        unique_modules = set(modules)  # Unique modules in this site
+    total_prebid_instances = 0
 
-        # Count number of sites per module
-        for module in unique_modules:
+    for item in data:
+        prebid_instances = []
+
+        if 'prebidInstances' in item:
+            prebid_instances = item['prebidInstances']
+        elif 'version' in item:
+            prebid_instances = [item]
+
+        total_prebid_instances += len(prebid_instances)
+
+        modules_in_site = set()
+
+        for instance in prebid_instances:
+            modules = instance.get('modules', [])
+            unique_modules_in_instance = set(modules)
+            modules_in_site.update(unique_modules_in_instance)
+
+            # Count module occurrences per Prebid instance
+            for module in unique_modules_in_instance:
+                category = classify_module(module)
+                module_instance_counter[category][module] += 1
+
+        # Count modules per site
+        for module in modules_in_site:
             category = classify_module(module)
             module_site_counter[category][module] += 1
 
-        # Count total instances per module
-        for module in modules:
-            category = classify_module(module)
-            module_instance_counter[category][module] += 1
-
-    return module_site_counter, module_instance_counter
+    return module_site_counter, module_instance_counter, total_prebid_instances
 
 # Create a bar chart of the version buckets
 def create_version_chart(data):
@@ -320,7 +335,7 @@ def create_global_var_name_chart(data):
         st.write("No Prebid global variable names found to plot.")
 
 # Function to display module statistics
-def display_module_stats(module_site_stats, module_instance_stats, total_sites):
+def display_module_stats(module_site_stats, module_instance_stats, total_sites, total_prebid_instances):
     for category in module_site_stats.keys():
         site_counter = module_site_stats[category]
         instance_counter = module_instance_stats[category]
@@ -335,11 +350,8 @@ def display_module_stats(module_site_stats, module_instance_stats, total_sites):
         # Sort the DataFrame by Number of Sites
         df = df.sort_values(by='Number of Sites', ascending=False).reset_index(drop=True)
 
-        # Compute total instances for this category
-        total_instances = sum(instance_counter.values())
-
         # Display total number of sites and instances for reference
-        st.subheader(f"{category} Popularity (Total Sites: {total_sites}, Total Instances: {total_instances})")
+        st.subheader(f"{category} Popularity (Total Sites: {total_sites}, Total Prebid Instances: {total_prebid_instances})")
         st.table(df)
 
 # Streamlit app
@@ -357,7 +369,7 @@ if uploaded_file is not None:
         create_prebid_instance_chart(filtered_data)
         create_library_chart(filtered_data)
         create_global_var_name_chart(filtered_data)
-        module_site_stats, module_instance_stats = extract_module_stats(filtered_data)
-        display_module_stats(module_site_stats, module_instance_stats, total_sites)
+        module_site_stats, module_instance_stats, total_prebid_instances = extract_module_stats(filtered_data)
+        display_module_stats(module_site_stats, module_instance_stats, total_sites, total_prebid_instances)
     else:
         st.write("No valid data found in the uploaded file.")
