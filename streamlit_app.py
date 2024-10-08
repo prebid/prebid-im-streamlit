@@ -335,7 +335,7 @@ def create_global_var_name_chart(data):
         st.write("No Prebid global variable names found to plot.")
 
 # Function to display module statistics
-def display_module_stats(module_site_stats, module_instance_stats, total_sites, total_prebid_instances):
+def display_module_stats(module_site_stats, module_instance_stats, sites_with_prebid, total_prebid_instances):
     for category in module_site_stats.keys():
         site_counter = module_site_stats[category]
         instance_counter = module_instance_stats[category]
@@ -350,8 +350,8 @@ def display_module_stats(module_site_stats, module_instance_stats, total_sites, 
         # Sort the DataFrame by Number of Sites
         df = df.sort_values(by='Number of Sites', ascending=False).reset_index(drop=True)
 
-        # Display total number of sites and instances for reference
-        st.subheader(f"{category} Popularity (Total Sites: {total_sites}, Total Prebid Instances: {total_prebid_instances})")
+        # Display total number of sites with Prebid.js and instances for reference
+        st.subheader(f"{category} Popularity (Total Sites with Prebid.js: {sites_with_prebid}, Total Prebid Instances: {total_prebid_instances})")
         st.table(df)
 
 # Streamlit app
@@ -364,12 +364,16 @@ if uploaded_file is not None:
     if data:  # Proceed only if there is valid data
         # Filter out entries with more than 300 modules
         filtered_data = [item for item in data if count_modules(item) <= 300]
-        total_sites = len(filtered_data)  # Total number of sites after filtering
+
+        # Calculate total sites with Prebid.js
+        sites_with_prebid = sum(1 for item in filtered_data if count_prebid_instances(item) > 0)
+
         create_version_chart(filtered_data)
         create_prebid_instance_chart(filtered_data)
         create_library_chart(filtered_data)
         create_global_var_name_chart(filtered_data)
+
         module_site_stats, module_instance_stats, total_prebid_instances = extract_module_stats(filtered_data)
-        display_module_stats(module_site_stats, module_instance_stats, total_sites, total_prebid_instances)
+        display_module_stats(module_site_stats, module_instance_stats, sites_with_prebid, total_prebid_instances)
     else:
         st.write("No valid data found in the uploaded file.")
