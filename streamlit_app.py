@@ -20,7 +20,7 @@ def load_json(file):
         return None
     return data
 
-# Function to categorize versions into buckets
+# Updated function to categorize versions into broader buckets
 def categorize_version(version):
     # Remove leading 'v' if present
     if version.startswith('v'):
@@ -28,63 +28,23 @@ def categorize_version(version):
 
     # Split the version into major and minor parts
     version_parts = re.split(r'\.|-', version)
-    
+
     try:
         major = int(version_parts[0])
-        minor = int(version_parts[1]) if len(version_parts) > 1 else 0
     except ValueError:
         return 'Other'
 
-    # Group versions based on major and minor version numbers
-    if major == 8:
-        if 0 <= minor <= 9:
-            return '8.0-8.9'
-        elif 10 <= minor <= 19:
-            return '8.10-8.19'
-        elif 20 <= minor <= 29:
-            return '8.20-8.29'
-        elif 30 <= minor <= 39:
-            return '8.30-8.39'
-        elif 40 <= minor <= 49:
-            return '8.40-8.49'
-        elif 50 <= minor <= 59:
-            return '8.50-8.59'
-        else:
-            return '8.60+'
-    elif major == 9:
-        if 0 <= minor <= 9:
-            return '9.0-9.9'
-        elif 10 <= minor <= 19:
-            return '9.10-9.19'
-        elif 20 <= minor <= 29:
-            return '9.20-9.29'
-        elif 30 <= minor <= 39:
-            return '9.30-9.39'
-        elif 40 <= minor <= 49:
-            return '9.40-9.49'
-        elif 50 <= minor <= 59:
-            return '9.50-9.59'
-        else:
-            return '9.60+'
-    elif major == 7:
-        if 0 <= minor <= 9:
-            return '7.0-7.9'
-        elif 10 <= minor <= 19:
-            return '7.10-7.19'
-        elif 20 <= minor <= 29:
-            return '7.20-7.29'
-        elif 30 <= minor <= 39:
-            return '7.30-7.39'
-        elif 40 <= minor <= 49:
-            return '7.40-7.49'
-        elif 50 <= minor <= 59:
-            return '7.50-7.59'
-        else:
-            return '7.60+'
-    elif major in range(3, 7):
-        return f'{major}.x'
-    elif major in range(0, 3):
+    # Group versions into broader buckets
+    if major in [0, 1, 2]:
         return '0.x-2.x'
+    elif major in [3, 4, 5]:
+        return '3.x-5.x'
+    elif major in [6, 7]:
+        return '6.x-7.x'
+    elif major == 8:
+        return '8.x'
+    elif major == 9:
+        return '9.x'
     else:
         return 'Other'
 
