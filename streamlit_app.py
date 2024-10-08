@@ -8,6 +8,7 @@ from collections import Counter
 
 # Disable math text parsing globally
 mpl.rcParams['text.usetex'] = False
+mpl.rcParams['mathtext.default'] = 'regular'
 
 # Load the JSON data from the uploaded file
 def load_json(file):
@@ -190,11 +191,11 @@ def create_version_chart(data):
 
     # Plot the bar chart
     fig, ax = plt.subplots()
-    version_counts.plot(kind='bar', ax=ax)
+    ax.bar(version_counts.index, version_counts.values)
     ax.set_xlabel('Version Buckets')
     ax.set_ylabel('Number of URLs')
     ax.set_title('Number of URLs per Version Bucket')
-    plt.xticks(rotation=45)
+    plt.xticks(rotation=45, ha='right')
     st.pyplot(fig)
 
     # Display the total number of sites
@@ -210,7 +211,7 @@ def create_prebid_instance_chart(data):
 
     # Plot the bar chart
     fig, ax = plt.subplots()
-    prebid_instance_distribution.plot(kind='bar', ax=ax)
+    ax.bar(prebid_instance_distribution.index.astype(str), prebid_instance_distribution.values)
     ax.set_xlabel('Number of Prebid Instances per Site')
     ax.set_ylabel('Number of Sites')
     ax.set_title('Distribution of Prebid Instances per Site')
@@ -229,35 +230,48 @@ def create_library_chart(data):
 
         # Plot the bar chart
         fig, ax = plt.subplots(figsize=(10, 6))
-        library_counts.plot(kind='bar', ax=ax)
+        ax.bar(library_counts.index, library_counts.values)
         ax.set_xlabel('Libraries')
         ax.set_ylabel('Number of Sites')
         ax.set_title('Popularity of Detected Libraries')
-        plt.xticks(rotation=45)
+        plt.xticks(rotation=45, ha='right')
         st.pyplot(fig)
     else:
         st.write("No libraries data available to plot.")
 
 # Create a bar chart of Prebid global object name popularity
 def create_global_var_name_chart(data):
+    import matplotlib.ticker as ticker
+    
     global_var_names = extract_global_var_names(data)
     if global_var_names:
+        # Count occurrences of each global variable name
         global_var_name_counts = pd.Series(global_var_names).value_counts().sort_values(ascending=False)
         
-        # Escape underscores in labels
-        escaped_labels = [name.replace('_', r'\_') for name in global_var_name_counts.index]
+        # Escape special characters in labels
+        def escape_label(label):
+            special_chars = ['_', '$', '%', '&', '#', '{', '}', '~', '^', '\\']
+            for char in special_chars:
+                label = label.replace(char, f'\\{char}')
+            return label
         
-        # Plot the bar chart
+        escaped_labels = [escape_label(name) for name in global_var_name_counts.index]
+        
+        # Plot the bar chart using Matplotlib directly
         fig, ax = plt.subplots(figsize=(10, 6))
-        global_var_name_counts.plot(kind='bar', ax=ax)
+        ax.bar(range(len(global_var_name_counts)), global_var_name_counts.values)
         ax.set_xlabel('Prebid Global Object Names')
         ax.set_ylabel('Number of Sites')
         ax.set_title('Popularity of Prebid Global Object Names')
         
-        # Rotate x-axis labels and set them with escaped labels
+        # Set x-axis labels with proper alignment
+        ax.set_xticks(range(len(escaped_labels)))
         ax.set_xticklabels(escaped_labels, rotation=45, ha='right')
         
-        # Disable math text parsing for x-axis labels
+        # Use FixedFormatter to prevent automatic formatting
+        ax.xaxis.set_major_formatter(ticker.FixedFormatter(escaped_labels))
+        
+        # Ensure labels are treated as plain text
         for label in ax.get_xticklabels():
             label.set_text(label.get_text())
         
