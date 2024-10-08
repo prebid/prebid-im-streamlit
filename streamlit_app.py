@@ -204,11 +204,14 @@ def create_version_chart(data):
 # Create a bar chart of Prebid instances per site
 def create_prebid_instance_chart(data):
     prebid_instance_counts = [count_prebid_instances(item) for item in data]
-    labels = ['1', '2', '3', '4', '5', '6+']
-    bins = [0,1,2,3,4,5,float('inf')]
+    
+    # Adjust labels and bins to include zero instances
+    labels = ['0', '1', '2', '3', '4', '5', '6+']
+    bins = [-0.1, 0,1,2,3,4,5,float('inf')]  # Start from -0.1 to include zero counts properly
+    
     binned_counts = pd.cut(prebid_instance_counts, bins=bins, right=True, labels=labels)
     prebid_instance_distribution = binned_counts.value_counts().sort_index()
-
+    
     # Plot the bar chart
     fig, ax = plt.subplots()
     ax.bar(prebid_instance_distribution.index.astype(str), prebid_instance_distribution.values)
@@ -228,13 +231,34 @@ def create_library_chart(data):
     if all_libraries:
         library_counts = pd.Series(all_libraries).value_counts().sort_values(ascending=False)
 
-        # Plot the bar chart
+        # Escape special characters in labels
+        def escape_label(label):
+            special_chars = ['_', '$', '%', '&', '#', '{', '}', '~', '^', '\\']
+            for char in special_chars:
+                label = label.replace(char, f'\\{char}')
+            return label
+
+        escaped_labels = [escape_label(name) for name in library_counts.index]
+
+        # Plot the bar chart using Matplotlib directly
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.bar(library_counts.index, library_counts.values)
+        ax.bar(range(len(library_counts)), library_counts.values)
         ax.set_xlabel('Libraries')
         ax.set_ylabel('Number of Sites')
         ax.set_title('Popularity of Detected Libraries')
-        plt.xticks(rotation=45, ha='right')
+
+        # Set x-axis labels
+        ax.set_xticks(range(len(escaped_labels)))
+        ax.set_xticklabels(escaped_labels, rotation=45, ha='right')
+
+        # Use FixedFormatter to prevent automatic formatting
+        import matplotlib.ticker as ticker
+        ax.xaxis.set_major_formatter(ticker.FixedFormatter(escaped_labels))
+
+        # Ensure labels are treated as plain text
+        for label in ax.get_xticklabels():
+            label.set_text(label.get_text())
+
         st.pyplot(fig)
     else:
         st.write("No libraries data available to plot.")
