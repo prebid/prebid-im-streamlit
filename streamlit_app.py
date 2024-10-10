@@ -7,7 +7,7 @@ import re
 from collections import Counter
 import requests
 
-# Disable math text parsing globally
+# Disable math text parsing globally yeah
 mpl.rcParams['text.usetex'] = False
 mpl.rcParams['mathtext.default'] = 'regular'
 
