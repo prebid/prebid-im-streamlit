@@ -201,7 +201,7 @@ def create_version_chart(data):
     ax.bar(version_counts.index, version_counts.values)
     ax.set_xlabel('Version Buckets')
     ax.set_ylabel('Number of URLs')
-    ax.set_title('Number of URLs per Version Bucket')
+    ax.set_title('Number of URLs by Prebid.js Version')
     plt.xticks(rotation=45, ha='right')
     st.pyplot(fig)
 
