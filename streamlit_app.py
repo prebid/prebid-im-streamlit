@@ -331,7 +331,7 @@ def display_module_stats(module_site_stats, module_instance_stats, sites_with_pr
         st.table(df)
 
 # Streamlit app
-st.title('Prebid Analysis Dashboard')
+st.title('Prebid Integration Monitor Tool')
 
 # Default JSON data URL
 default_json_url = 'https://raw.githubusercontent.com/prebid/prebid-integration-monitor/main/output/results.json'
