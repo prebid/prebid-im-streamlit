@@ -333,8 +333,6 @@ def display_module_stats(module_site_stats, module_instance_stats, sites_with_pr
 # Streamlit app
 st.title('Prebid Integration Monitor Tool')
 
-st.subheader('The purpose of this tool is to provide our paid members basic visibility into Prebid adoption.')
-
 st.subheader('We are continually updating this app and adding websites to review. If you have feedback or are interested in participating, please reach out to support@prebid.org.')
 
 # Default JSON data URL
