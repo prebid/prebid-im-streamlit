@@ -55,35 +55,34 @@ RAW_BASE = f"https://raw.githubusercontent.com/{ORG}/{REPO}/{BRANCH}/"
 
 @st.cache_data(show_spinner=True)
 def load_all_months():
-    """Gather JSON from every month folder under /output.
-    Uses GitHub API when available; falls back to a static month list
-    if rate‑limited (HTTP 403) or any other API failure occurs.
-    Optionally honours a personal token via st.secrets['github_token']
-    to raise the unauthenticated rate limit.
+    """Merge JSON from all month folders under /output.
+
+    * Uses a GitHub token from `st.secrets['github_token']` (if present)
+      to avoid rate‑limit 403s (highly recommended for Streamlit Cloud).
+    * If the top‑level API call still 403s with **no token**, we show
+      a clear error and stop rather than silently skipping everything.
     """
-    MONTH_LIST = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ]
+    # Inject token header if available
+    token = st.secrets.get("github_token")  # type: ignore[attr-defined]
+    if token:
+        SESSION.headers["Authorization"] = f"token {token}"
 
-    combined: list[dict] = []
-
-    # --- helper to load any raw JSON url safely
-    def _extend_from_raw(raw_url: str, label: str):
-        try:
-            combined.extend(load_json_from_url(raw_url))
-        except Exception as e:
-            st.warning(f"   ↳ skip {label}: {e}")
-
-    # --- try GitHub API first (higher fidelity listing)
     try:
         top = SESSION.get(f"{API_BASE}?ref={BRANCH}", timeout=30)
         top.raise_for_status()
-        months_meta = [m for m in top.json() if m["type"] == "dir"]
-    except Exception as api_err:
-        st.warning(f"GitHub API directory listing failed ({api_err}). "
-                   "Falling back to static month list.")
-        months_meta = [{"name": m, "url": f"{API_BASE}/{m}"} for m in MONTH_LIST]
+    except requests.HTTPError as err:
+        if err.response.status_code == 403 and not token:
+            st.error("GitHub API rate‑limit exceeded. Add a personal access "
+                     "token to `st.secrets['github_token']` and reload.")
+            return []
+        raise
+
+    months_meta = [m for m in top.json() if m["type"] == "dir"]
+    if not months_meta:
+        st.error("No month directories found in repository.")
+        return []
+
+    combined: list[dict] = []
 
     for month in months_meta:
         month_name = month["name"]
@@ -92,19 +91,22 @@ def load_all_months():
             resp = SESSION.get(f"{dir_api}?ref={BRANCH}", timeout=30)
             resp.raise_for_status()
             files_meta = resp.json()
-        except Exception:
-            # Fallback: try loading output/{month}/results.json directly
-            fallback_raw = f"{RAW_BASE}output/{month_name}/results.json"
-            _extend_from_raw(fallback_raw, f"{month_name}/results.json (fallback)")
+        except Exception as e:
+            st.warning(f"⚠️  Cannot list {month_name}: {e}")
             continue
 
-        # Prefer results.json; else every *.json file
-        results_meta = next((f for f in files_meta if f["type"] == "file" and f["name"] == "results.json"), None)
-        targets = [results_meta] if results_meta else [f for f in files_meta if f["type"] == "file" and f["name"].endswith(".json")]
+        # Grab every *.json (there is no results.json in these dirs)
+        targets = [f for f in files_meta if f["type"] == "file" and f["name"].endswith(".json")]
+        if not targets:
+            st.warning(f"No .json files in {month_name}")
+            continue
 
         for fmeta in targets:
             raw_url = fmeta.get("download_url") or RAW_BASE + fmeta["path"]
-            _extend_from_raw(raw_url, fmeta["name"])
+            try:
+                combined.extend(load_json_from_url(raw_url))
+            except Exception as e:
+                st.warning(f"   ↳ skip {fmeta['name']} ({month_name}): {e}")
 
     return combined
 
@@ -254,12 +256,9 @@ def build_module_stats(data):
 # 📥 Sidebar – data source
 # -----------------------
 st.sidebar.header("Data source")
-mode = st.sidebar.radio("Choose dataset",
-                        ("All historical months (default)", "Single feed URL"))
+mode = st.sidebar.radio("Choose dataset", ("All historical months (default)", "Single feed URL"))
 DEFAULT_SINGLE_URL = f"{RAW_BASE}output/results.json"
-json_url = st.sidebar.text_input("Single JSON URL",
-                                 value=DEFAULT_SINGLE_URL,
-                                 disabled=mode.startswith("All"))
+json_url = st.sidebar.text_input("Single JSON URL", value=DEFAULT_SINGLE_URL, disabled=mode.startswith("All"))
 upload_file = st.sidebar.file_uploader("…or upload a JSON file", type="json")
 
 with st.spinner("Loading data …"):
@@ -276,12 +275,12 @@ with st.spinner("Loading data …"):
 if not raw_data:
     st.stop()
 
-MAX_MODULES = st.sidebar.slider("Ignore sites with more than N modules",
-                                50, 500, 300, 25)
+MAX_MODULES = st.sidebar.slider("Ignore sites with more than N modules", 50, 500, 300, 25)
 
 # -----------------------
 # 🧹 Data cleanse
 # -----------------------
+
 data = [item for item in raw_data if len(extract_modules(item)) <= MAX_MODULES]
 if not data:
     st.warning("No records after filtering – adjust slider?")
