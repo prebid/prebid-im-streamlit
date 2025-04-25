@@ -1,9 +1,9 @@
-# streamlit_app.py  – Prebid Integration Monitor  (orjson-optional)
+# streamlit_app.py  – Prebid Integration Monitor (orjson-optional, fixed)
 
 import streamlit as st
 import pandas as pd
 import altair as alt
-import requests, gzip, io, re, json  # stdlib json always available
+import requests, gzip, io, re, json
 from collections import Counter
 from typing import List, Dict, Any
 
@@ -17,14 +17,13 @@ try:
     def jdumps(o):
         return orjson.dumps(o, option=orjson.OPT_INDENT_2)
 except ModuleNotFoundError:
-    orjson = None  # type: ignore
-    import json as _std_json
+    import json as _stdjson
 
     def jloads(b: bytes | str):
-        return _std_json.loads(b if isinstance(b, str) else b.decode())
+        return _stdjson.loads(b if isinstance(b, str) else b.decode())
 
     def jdumps(o):
-        return _std_json.dumps(o, indent=2).encode()
+        return _stdjson.dumps(o, indent=2).encode()
 
 # -------------------------------------------------
 # 🎨  Page config & CSS
@@ -55,18 +54,16 @@ mpl.rcParams["mathtext.default"] = "regular"
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Prebid-Integration-Monitor-App"})
 
-token = st.secrets.get("github_token")           # type: ignore[attr-defined]
+token = st.secrets.get("github_token")  # type: ignore[attr-defined]
 if token:
     SESSION.headers["Authorization"] = f"token {token}"
 
 ORG, REPO = "prebid", "prebid-integration-monitor"
-
 COMBINED_URL = (
     "https://raw.githubusercontent.com/"
     f"{ORG}/{REPO}/main/output/prebid_combined.json.gz"
 )
-
-# month-walk (legacy, branch jlist)
+# legacy month-walk (branch jlist)
 API_BASE = f"https://api.github.com/repos/{ORG}/{REPO}/contents/output"
 RAW_BASE = f"https://raw.githubusercontent.com/{ORG}/{REPO}/jlist/"
 
@@ -74,59 +71,56 @@ RAW_BASE = f"https://raw.githubusercontent.com/{ORG}/{REPO}/jlist/"
 # ⚡  Slim-object helper
 # -------------------------------------------------
 def slim_item(it: Dict[str, Any]) -> Dict[str, Any]:
-    """Retain only fields used in plots to save RAM."""
-    slim = {
-        "siteKey": it.get("site")
-                or it.get("domain")
-                or it.get("url")
-                or it.get("pageUrl"),
+    return {
+        "siteKey": it.get("site") or it.get("domain")
+                 or it.get("url") or it.get("pageUrl"),
         "version": it.get("version"),
         "modules": it.get("modules", []),
         "libraries": it.get("libraries", []),
-    }
-    if "prebidInstances" in it:
-        slim["prebidInstances"] = [
+        "prebidInstances": [
             {
                 "version": inst.get("version"),
                 "modules": inst.get("modules", []),
                 "globalVarName": inst.get("globalVarName"),
             }
-            for inst in it["prebidInstances"]
-        ]
-    return slim
+            for inst in it.get("prebidInstances", [])
+        ],
+    }
 
 # -------------------------------------------------
-# 📥  Data loaders (all slimmed)
+# 📥  Data loaders
 # -------------------------------------------------
 @st.cache_data(show_spinner=True)
 def load_combined_feed() -> List[Dict[str, Any]]:
     r = SESSION.get(COMBINED_URL, timeout=60)
     r.raise_for_status()
     with gzip.GzipFile(fileobj=io.BytesIO(r.content)) as gz:
-        raw = orjson.loads(gz.read())
+        raw = jloads(gz.read())
     return [slim_item(x) for x in raw]
 
 @st.cache_data(show_spinner=True)
 def load_all_months(limit_months: int | None = None) -> List[Dict[str, Any]]:
     top = SESSION.get(f"{API_BASE}?ref=jlist", timeout=30)
     if top.status_code == 403 and not token:
-        st.error("GitHub API rate-limit hit – add a token or switch to the combined feed.")
+        st.error("GitHub API rate-limit hit – add a token or switch to combined feed.")
         return []
     top.raise_for_status()
 
-    months_meta = [m for m in top.json() if m["type"] == "dir"]
-    months_meta.sort(key=lambda m: m["name"], reverse=True)
+    months = sorted(
+        [m for m in top.json() if m["type"] == "dir"],
+        key=lambda m: m["name"], reverse=True
+    )
     if limit_months:
-        months_meta = months_meta[:limit_months]
+        months = months[:limit_months]
 
-    combined: List[Dict[str, Any]] = []
-    for month in months_meta:
+    combined: list[dict] = []
+    for month in months:
         try:
-            files_meta = SESSION.get(month["url"], timeout=30).json()
+            files = SESSION.get(month["url"], timeout=30).json()
         except Exception as e:
             st.warning(f"⚠️  skip {month['name']}: {e}")
             continue
-        for f in [f for f in files_meta if f["type"] == "file" and f["name"].endswith(".json")]:
+        for f in [f for f in files if f["type"] == "file" and f["name"].endswith(".json")]:
             raw_url = f.get("download_url") or RAW_BASE + f["path"]
             try:
                 combined.extend(slim_item(x) for x in SESSION.get(raw_url, timeout=30).json())
@@ -142,10 +136,12 @@ def load_uploaded_json(file):
         return None
 
 # -------------------------------------------------
-# 🏷️  Classification & extractors
+# 🏷️  Extraction helpers
 # -------------------------------------------------
-def categorize_version(v: str) -> str:
-    v = (v or "").lstrip("v")
+def categorize_version(v: str | None) -> str:
+    if not v:
+        return "Other"
+    v = v.lstrip("v")
     try:
         major = int(re.split(r"[.-]", v)[0])
     except ValueError:
@@ -166,24 +162,23 @@ def classify_module(n: str) -> str:
 
 def extract_versions(it):
     v = [it["version"]] if it.get("version") else []
-    if "prebidInstances" in it:
-        v += [i["version"] for i in it["prebidInstances"] if i.get("version")]
+    v += [i["version"] for i in it["prebidInstances"] if i.get("version")]
     return v
 
 def extract_modules(it):
-    mods = list(it.get("modules", []))
-    for inst in it.get("prebidInstances", []):
-        mods.extend(inst.get("modules", []))
+    mods = list(it["modules"])
+    for inst in it["prebidInstances"]:
+        mods.extend(inst["modules"])
     return mods
 
 def count_prebid_instances(it):
-    return len(it.get("prebidInstances", [])) or (1 if it.get("version") else 0)
+    return len(it["prebidInstances"]) or (1 if it.get("version") else 0)
 
-def extract_libraries(it):      return it.get("libraries", [])
-def extract_global(it):         return [i.get("globalVarName") for i in it.get("prebidInstances", []) if i.get("globalVarName")]
+def extract_libraries(it):       return it["libraries"]
+def extract_global_names(it):    return [i["globalVarName"] for i in it["prebidInstances"] if i.get("globalVarName")]
 
 # -------------------------------------------------
-# 📊  Cached DataFrames
+# 📊  DataFrames
 # -------------------------------------------------
 VERSION_ORDER    = ["0.x-2.x","3.x-5.x","6.x-7.x","8.x","9.x","Other"]
 INSTANCE_BUCKETS = ["0","1","2","3","4","5","6+"]
@@ -197,22 +192,22 @@ def df_versions(data):
 
 @st.cache_data(show_spinner=False)
 def df_instances(data):
-    counts = [count_prebid_instances(i) for i in data]
-    bins = pd.cut(counts, [-.1,0,1,2,3,4,5,float("inf")],
-                  labels=INSTANCE_BUCKETS, include_lowest=True)
+    cnts = [count_prebid_instances(d) for d in data]
+    bins = pd.cut(cnts,[-.1,0,1,2,3,4,5,float("inf")],
+                  labels=INSTANCE_BUCKETS,include_lowest=True)
     return (pd.Series(bins,name="instances").value_counts()
             .reindex(INSTANCE_BUCKETS,fill_value=0).reset_index(name="count")
             .rename(columns={"index":"instances"}))
 
 @st.cache_data(show_spinner=False)
 def df_libraries(data):
-    libs = [l for it in data for l in extract_libraries(it)]
+    libs = [l for d in data for l in extract_libraries(d)]
     return (pd.Series(libs,name="library").value_counts()
             .reset_index(name="count").rename(columns={"index":"library"}))
 
 @st.cache_data(show_spinner=False)
 def df_globals(data):
-    g = [name for it in data for name in extract_global(it)]
+    g = [n for d in data for n in extract_global_names(d)]
     return (pd.Series(g,name="global").value_counts()
             .reset_index(name="count").rename(columns={"index":"global"}))
 
@@ -222,7 +217,7 @@ def build_module_stats(data):
     inst_ctr = {k: Counter() for k in site_ctr}
     total = 0
     for it in data:
-        insts = it.get("prebidInstances", []) or ([it] if it.get("version") else [])
+        insts = it["prebidInstances"] or ([it] if it.get("version") else [])
         total += len(insts)
         site_mods = set()
         for ins in insts:
@@ -235,33 +230,29 @@ def build_module_stats(data):
     return site_ctr, inst_ctr, total
 
 # -------------------------------------------------
-# 📥  Sidebar – source controls
+# 📥  Sidebar
 # -------------------------------------------------
 st.sidebar.header("Data source")
 
-source_mode = st.sidebar.radio(
-    "Select dataset",
-    ("Combined feed (default)", "Aggregate recent months")
-)
-
-if source_mode.startswith("Aggregate"):
-    months_lim = st.sidebar.slider("Months to load", 1, 12, 3, 1)
+mode = st.sidebar.radio("Select dataset", ("Combined feed (default)", "Aggregate recent months"))
+if mode.startswith("Aggregate"):
+    months = st.sidebar.slider("Months to load", 1, 12, 3, 1)
 else:
-    months_lim = None
+    months = None
 
-upload = st.sidebar.file_uploader("…or upload JSON", type="json")
+upload_json = st.sidebar.file_uploader("…or upload JSON", type="json")
 MAX_MODULES = st.sidebar.slider("Ignore sites with > N modules", 50, 500, 300, 25)
 
 # -------------------------------------------------
 # 🚀  Load data
 # -------------------------------------------------
-with st.spinner("Fetching & parsing data …"):
-    if upload:
-        raw = load_uploaded_json(upload)
-    elif source_mode.startswith("Combined"):
+with st.spinner("Loading data …"):
+    if upload_json:
+        raw = load_uploaded_json(upload_json)
+    elif mode.startswith("Combined"):
         raw = load_combined_feed()
     else:
-        raw = load_all_months(limit_months=months_lim)
+        raw = load_all_months(limit_months=months)
 
 if not raw:
     st.stop()
@@ -274,20 +265,20 @@ if not data:
 # -------------------------------------------------
 # 🏷️  Metrics & download
 # -------------------------------------------------
-site_cnt   = len(data)
-sites_with = sum(1 for d in data if count_prebid_instances(d))
+sites = len(data)
+sites_pb = sum(1 for d in data if count_prebid_instances(d))
 inst_total = sum(count_prebid_instances(d) for d in data)
-avg_mods   = sum(len(extract_modules(d)) for d in data) / max(inst_total, 1)
+avg_mods = sum(len(extract_modules(d)) for d in data) / max(inst_total,1)
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total sites scanned", f"{site_cnt:,}")
-c2.metric("Sites w/ Prebid.js", f"{sites_with:,}")
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("Total sites scanned", f"{sites:,}")
+c2.metric("Sites w/ Prebid.js", f"{sites_pb:,}")
 c3.metric("Total Prebid instances", f"{inst_total:,}")
 c4.metric("Avg modules / instance", f"{avg_mods:.1f}")
 
 st.download_button(
-    "💾 Download slimmed JSON",
-    orjson.dumps(data, option=orjson.OPT_INDENT_2),
+    "💾 Download slim JSON",
+    jdumps(data),
     "prebid_slim.json",
     "application/json",
 )
@@ -295,91 +286,83 @@ st.download_button(
 st.divider()
 
 # -------------------------------------------------
-# 📊  DataFrames & charts
+# 📊  Charts
 # -------------------------------------------------
-versions_df  = df_versions(data)
-instances_df = df_instances(data)
-libraries_df = df_libraries(data)
-globals_df   = df_globals(data)
-mod_site_ctr, mod_inst_ctr, _ = build_module_stats(data)
+vers_df   = df_versions(data)
+inst_df   = df_instances(data)
+lib_df    = df_libraries(data)
+glob_df   = df_globals(data)
+mod_site, mod_inst, _ = build_module_stats(data)
 
-tabs = st.tabs(["Versions", "Instances/site", "Libraries", "Global names", "Modules"])
+tabs = st.tabs(["Versions","Instances/site","Libraries","Global names","Modules"])
 
 with tabs[0]:
     st.subheader("Prebid.js version buckets")
     st.altair_chart(
-        alt.Chart(versions_df).mark_bar().encode(
-            x=alt.X("bucket:N", sort=VERSION_ORDER, title="Version bucket"),
-            y=alt.Y("count:Q", title="Occurrences"),
+        alt.Chart(vers_df).mark_bar().encode(
+            x=alt.X("bucket:N", sort=VERSION_ORDER),
+            y="count:Q",
             tooltip=["count"],
-        ).properties(height=400),
-        use_container_width=True
+        ).properties(height=400), use_container_width=True
     )
 
 with tabs[1]:
     st.subheader("Distribution of Prebid instances per site")
     st.altair_chart(
-        alt.Chart(instances_df).mark_bar().encode(
-            x=alt.X("instances:N", sort=INSTANCE_BUCKETS, title="Instances"),
-            y=alt.Y("count:Q", title="Sites"),
+        alt.Chart(inst_df).mark_bar().encode(
+            x=alt.X("instances:N", sort=INSTANCE_BUCKETS),
+            y="count:Q",
             tooltip=["count"],
-        ).properties(height=400),
-        use_container_width=True
+        ).properties(height=400), use_container_width=True
     )
     with st.expander("Raw table & download"):
-        st.dataframe(instances_df, use_container_width=True)
-        st.download_button("CSV", instances_df.to_csv(index=False).encode(),
-                           "instances.csv", "text/csv")
+        st.dataframe(inst_df, use_container_width=True)
+        st.download_button("CSV", inst_df.to_csv(index=False).encode(), "instances.csv", "text/csv")
 
 with tabs[2]:
     st.subheader("Popularity of external libraries")
     topN = st.slider("Show top N", 10, 100, 30, 5)
     st.altair_chart(
-        alt.Chart(libraries_df.head(topN)).mark_bar().encode(
+        alt.Chart(lib_df.head(topN)).mark_bar().encode(
             y=alt.Y("library:N", sort="-x"),
-            x=alt.X("count:Q"),
+            x="count:Q",
             tooltip=["count"],
-        ).properties(height=600),
-        use_container_width=True
+        ).properties(height=600), use_container_width=True
     )
     with st.expander("Raw table & download"):
-        st.dataframe(libraries_df, use_container_width=True)
-        st.download_button("CSV", libraries_df.to_csv(index=False).encode(),
-                           "libraries.csv", "text/csv")
+        st.dataframe(lib_df, use_container_width=True)
+        st.download_button("CSV", lib_df.to_csv(index=False).encode(), "libraries.csv", "text/csv")
 
 with tabs[3]:
     st.subheader("Popularity of global Prebid object names")
     st.altair_chart(
-        alt.Chart(globals_df).mark_bar().encode(
+        alt.Chart(glob_df).mark_bar().encode(
             y=alt.Y("global:N", sort="-x"),
-            x=alt.X("count:Q"),
+            x="count:Q",
             tooltip=["count"],
-        ).properties(height=500),
-        use_container_width=True
+        ).properties(height=500), use_container_width=True
     )
     with st.expander("Raw table & download"):
-        st.dataframe(globals_df, use_container_width=True)
-        st.download_button("CSV", globals_df.to_csv(index=False).encode(),
-                           "global_names.csv", "text/csv")
+        st.dataframe(glob_df, use_container_width=True)
+        st.download_button("CSV", glob_df.to_csv(index=False).encode(), "global_names.csv", "text/csv")
 
 with tabs[4]:
     st.subheader("Module popularity")
-    cat = st.selectbox("Module category", list(mod_site_ctr.keys()))
+    cat = st.selectbox("Module category", list(mod_site.keys()))
     topN_mod = st.slider("Bar chart – top N", 5, 100, 20, 5)
 
     full_df = pd.DataFrame({
-        "Module": list(mod_site_ctr[cat].keys()),
-        "Sites": list(mod_site_ctr[cat].values()),
-        "Instances": [mod_inst_ctr[cat][m] for m in mod_site_ctr[cat]],
+        "Module": list(mod_site[cat].keys()),
+        "Sites":  list(mod_site[cat].values()),
+        "Instances": [mod_inst[cat][m] for m in mod_site[cat]],
     }).sort_values("Sites", ascending=False).reset_index(drop=True)
 
     st.altair_chart(
         alt.Chart(full_df.head(topN_mod)).mark_bar().encode(
             y=alt.Y("Module:N", sort="-x"),
-            x=alt.X("Sites:Q"),
-            tooltip=["Sites", "Instances"],
-        ).properties(height=600),
-        use_container_width=True
+            x="Sites:Q",
+            tooltip=["Sites","Instances"],
+        ).properties(height=600), use_container_width=True
     )
     with st.expander("Raw table & download"):
         st.dataframe(full_df, use_container_width=True)
