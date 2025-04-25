@@ -1,21 +1,37 @@
-# streamlit_app.py  – Prebid Integration Monitor  (slim-object version)
+# streamlit_app.py  – Prebid Integration Monitor  (orjson-optional)
 
 import streamlit as st
 import pandas as pd
 import altair as alt
-import requests, gzip, io, re, orjson, json
+import requests, gzip, io, re, json  # stdlib json always available
 from collections import Counter
 from typing import List, Dict, Any
 
+# ---------- optional fast JSON ----------
+try:
+    import orjson
+
+    def jloads(b: bytes | str):
+        return orjson.loads(b if isinstance(b, bytes) else b.encode())
+
+    def jdumps(o):
+        return orjson.dumps(o, option=orjson.OPT_INDENT_2)
+except ModuleNotFoundError:
+    orjson = None  # type: ignore
+    import json as _std_json
+
+    def jloads(b: bytes | str):
+        return _std_json.loads(b if isinstance(b, str) else b.decode())
+
+    def jdumps(o):
+        return _std_json.dumps(o, indent=2).encode()
+
 # -------------------------------------------------
-# 🎨  Page & Global Config
+# 🎨  Page config & CSS
 # -------------------------------------------------
-st.set_page_config(
-    page_title="Prebid Integration Monitor",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Prebid Integration Monitor",
+                   page_icon="📊", layout="wide",
+                   initial_sidebar_state="expanded")
 
 st.markdown(
     """
