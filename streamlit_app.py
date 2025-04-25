@@ -1,4 +1,4 @@
-# streamlit_app.py – Prebid Integration Monitor (raw JSON default)
+# streamlit_app.py – Prebid Integration Monitor (raw JSON default, Voltax grouping)
 
 import streamlit as st
 import pandas as pd
@@ -26,7 +26,8 @@ except ModuleNotFoundError:
 # -------------------------------------------------
 # UI / CSS
 # -------------------------------------------------
-st.set_page_config("Prebid Integration Monitor", "📊", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config("Prebid Integration Monitor", "📊",
+                   layout="wide", initial_sidebar_state="expanded")
 st.markdown(
     """
     <style>
@@ -40,11 +41,11 @@ st.markdown(
 )
 
 # -------------------------------------------------
-# Remote feed URLs  (raw JSON)
+# Remote feed URLs  (raw JSON default)
 # -------------------------------------------------
 BASE = "https://raw.githubusercontent.com/prebid/prebid-integration-monitor/main/output/"
-RAW_JSON_URL   = BASE + "prebid_combined.json"
-RAW_JSON_GZ    = BASE + "prebid_combined.json.gz"     # fallback gzip
+RAW_JSON = BASE + "prebid_combined.json"
+RAW_JSON_GZ = RAW_JSON + ".gz"        # fallback gzip
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Prebid-Integration-App"})
 
@@ -57,27 +58,23 @@ def slim_item(it: Dict[str, Any]) -> Dict[str, Any]:
         or it.get("url") or it.get("pageUrl") or "unknown"
     )
 
-    # Collect module/library/global lists
-    modules   = list(it.get("modules"  , []))
+    modules   = list(it.get("modules", []))
     libraries = list(it.get("libraries", []))
     globals_  = list(it.get("globals" , []))
 
     pb_instances = it.get("prebidInstances")
     if isinstance(pb_instances, list):
-        # raw JSON: drill into instances
         if not (modules and libraries and globals_):
             for inst in pb_instances:
                 modules   += inst.get("modules" , [])
                 libraries += inst.get("libraries", [])
-                gv = inst.get("globalVarName")
-                if gv: globals_.append(gv)
+                if inst.get("globalVarName"):
+                    globals_.append(inst["globalVarName"])
     else:
-        # compact row: pb_inst count only
         pb_instances = [{}] * int(it.get("pb_inst", 0))
 
-    # Version – top-level or first instance’s
     version = it.get("version")
-    if not version and isinstance(pb_instances, list) and pb_instances:
+    if not version and isinstance(pb_instances, list):
         for inst in pb_instances:
             if inst.get("version"):
                 version = inst["version"]; break
@@ -92,19 +89,20 @@ def slim_item(it: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 # -------------------------------------------------
-# Deduplication (unique siteKey)
+# Deduplication
 # -------------------------------------------------
 def dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen, out = set(), []
     for r in rows:
         if r["siteKey"] not in seen:
-            seen.add(r["siteKey"]); out.append(r)
+            seen.add(r["siteKey"])
+            out.append(r)
     return out
 
 # -------------------------------------------------
 # Compact ↔ slim helpers
 # -------------------------------------------------
-def _d(x):  # safe decode
+def _d(x):           # safe decode
     if pd.isna(x): return ""
     return x.decode() if isinstance(x, bytes) else str(x)
 
@@ -114,21 +112,21 @@ def compact_df_to_slim(df: pd.DataFrame) -> List[Dict[str, Any]]:
         rows.append({
             "siteKey": _d(r["siteKey"]),
             "version": _d(r["version"]) or None,
-            "modules": _d(r["modules"]).split("|") if r["modules"] is not None else [],
+            "modules": _d(r["modules"]).split("|")   if r["modules"] is not None else [],
             "libraries": _d(r["libraries"]).split("|") if r["libraries"] is not None else [],
-            "globals": _d(r["globals"]).split("|") if r["globals"] is not None else [],
+            "globals": _d(r["globals"]).split("|")   if r["globals"] is not None else [],
             "prebidInstances": [{}]*int(r["pb_inst"] or 0),
         })
     return rows
 
-def slim_to_df(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+def slim_to_df(rows: List[Dict[str, Any]]) -> pd.DataFrame]:
     return pd.DataFrame({
-        "siteKey":[r["siteKey"] for r in rows],
-        "version":[r["version"] for r in rows],
-        "modules":["|".join(r["modules"]) for r in rows],
-        "libraries":["|".join(r["libraries"]) for r in rows],
-        "globals":["|".join(r["globals"]) for r in rows],
-        "pb_inst":[len(r["prebidInstances"]) for r in rows],
+        "siteKey":   [r["siteKey"] for r in rows],
+        "version":   [r["version"] for r in rows],
+        "modules":   ["|".join(r["modules"])   for r in rows],
+        "libraries": ["|".join(r["libraries"]) for r in rows],
+        "globals":   ["|".join(r["globals"])   for r in rows],
+        "pb_inst":   [len(r["prebidInstances"]) for r in rows],
     })
 
 def read_compact(byts: bytes, name: str) -> List[Dict[str, Any]]:
@@ -159,14 +157,14 @@ def write_compact(rows):
 def load_default():
     try:
         r = SESSION.get(RAW_JSON_GZ, timeout=60); r.raise_for_status()
-        rows = jloads(gzip.decompress(r.content))
+        data = jloads(gzip.decompress(r.content))
     except Exception:
-        r = SESSION.get(RAW_JSON_URL, timeout=60); r.raise_for_status()
-        rows = jloads(r.content)
-    return dedupe([slim_item(x) for x in rows])
+        r = SESSION.get(RAW_JSON, timeout=60); r.raise_for_status()
+        data = jloads(r.content)
+    return dedupe([slim_item(x) for x in data])
 
 # -------------------------------------------------
-# Sidebar
+# Sidebar & upload
 # -------------------------------------------------
 st.sidebar.header("Data source")
 upload = st.sidebar.file_uploader(
@@ -180,32 +178,39 @@ max_mods = st.sidebar.slider("Ignore sites with > N modules", 50, 500, 300, 25)
 # -------------------------------------------------
 with st.spinner("Loading data …"):
     if upload:
-        data_bytes = upload.read()
+        byts = upload.read()
         if upload.name.endswith((".parquet", ".csv", ".gz", ".csv.gz")):
-            rows = read_compact(data_bytes, upload.name)
+            rows = read_compact(byts, upload.name)
         else:
-            rows = [slim_item(x) for x in jloads(data_bytes)]
+            rows = [slim_item(x) for x in jloads(byts)]
     else:
         rows = load_default()
+
 rows = dedupe(rows)
 rows = [r for r in rows if len(r["modules"]) <= max_mods]
 if not rows:
     st.stop()
 
 # -------------------------------------------------
+# Voltax global grouping helper
+# -------------------------------------------------
+_voltax_re = re.compile(r"^voltaxPlayerPrebid-[A-Za-z0-9-]{5,}$")
+def group_global(name: str) -> str:
+    return "voltaxPlayerPrebid-*"
+    return "voltaxPlayerPrebid-*" if _voltax_re.match(name) else name
+
+# -------------------------------------------------
 # Metrics
 # -------------------------------------------------
-rows_pb  = [d for d in rows if d["version"] or d["prebidInstances"]]
+rows_pb = [d for d in rows if d["version"] or d["prebidInstances"]]
 inst_total = sum(len(d["prebidInstances"]) for d in rows_pb)
-mod_total  = 0
+mod_total = 0
 for d in rows_pb:
     if isinstance(d["prebidInstances"][0], dict) and d["prebidInstances"][0]:
-        # raw JSON – sum modules per instance
         for inst in d["prebidInstances"]:
             mod_total += len(inst.get("modules", d["modules"]))
     else:
         mod_total += len(d["modules"]) * len(d["prebidInstances"])
-
 avg_mods = mod_total / inst_total if inst_total else 0
 
 c1,c2,c3,c4 = st.columns(4)
@@ -214,10 +219,10 @@ c2.metric("Sites w/ Prebid.js", f"{len(rows_pb):,}")
 c3.metric("Total Prebid instances", f"{inst_total:,}")
 c4.metric("Avg modules / instance", f"{avg_mods:.1f}")
 
-st.download_button("💾 Slim JSON", jdumps(rows), "prebid_slim.json", "application/json")
+st.download_button("💾 Slim JSON", jdumps(rows),
+                   "prebid_slim.json","application/json")
 buf,name,mime = write_compact(rows)
 st.download_button("💾 Compact table", buf, name, mime)
-
 st.divider()
 
 # -------------------------------------------------
@@ -227,22 +232,21 @@ def cat_ver(v):
     v = str(v or "").lstrip("v")
     try:
         m = int(re.split(r"[.-]", v)[0])
-    except:
-        return "Other"
+    except: return "Other"
     if m <= 2: return "0.x-2.x"
     if m <= 5: return "3.x-5.x"
     if m <= 7: return "6.x-7.x"
     if m == 8: return "8.x"
     if m == 9: return "9.x"
-    if m == 10: return "10.x"
+    if m == 10:return "10.x"
     return "Other"
 
 def class_mod(m):
     m = m.lower()
-    if "bidadapter" in m:              return "Bid Adapter"
-    if "rtdprovider" in m or "rtdmodule" in m: return "RTD Module"
-    if "idsystem" in m or "userid" in m: return "ID System"
-    if "analytics" in m:               return "Analytics Adapter"
+    if "bidadapter" in m:                    return "Bid Adapter"
+    if "rtdprovider" in m or "rtdmodule" in m:return "RTD Module"
+    if "idsystem" in m or "userid" in m:      return "ID System"
+    if "analytics" in m:                      return "Analytics Adapter"
     return "Other"
 
 VER_ORDER = ["0.x-2.x","3.x-5.x","6.x-7.x","8.x","9.x","10.x","Other"]
@@ -256,17 +260,18 @@ inst_df = pd.Series(pd.cut([len(d["prebidInstances"]) for d in rows],
           .value_counts().reindex(INST_BINS, fill_value=0)\
           .reset_index(name="count").rename(columns={"index":"instances"})
 lib_df  = pd.Series([l for d in rows for l in d["libraries"]])\
-          .value_counts().reset_index(name="count").rename(columns={"index":"library"})
-glob_df = pd.Series([g for d in rows for g in d["globals"]])\
-          .value_counts().reset_index(name="count").rename(columns={"index":"global"})
+          .value_counts().reset_index(name="count")\
+          .rename(columns={"index":"library"})
+glob_df = pd.Series([group_global(g) for d in rows for g in d["globals"]])\
+          .value_counts().reset_index(name="count")\
+          .rename(columns={"index":"global"})
 
 def module_stats(data):
     site_ctr = {k: Counter() for k in ("Bid Adapter","RTD Module","ID System","Analytics Adapter","Other")}
     inst_ctr = {k: Counter() for k in site_ctr}
     for d in data:
-        mods_site = set(d["modules"])
         inst_count = len(d["prebidInstances"]) or 1
-        for m in mods_site:
+        for m in set(d["modules"]):
             cat = class_mod(m)
             site_ctr[cat][m] += 1
             inst_ctr[cat][m] += inst_count
@@ -283,24 +288,21 @@ with tabs[0]:
     st.altair_chart(
         alt.Chart(vers_df).mark_bar().encode(
             x=alt.X("bucket:N", sort=VER_ORDER),
-            y=alt.Y("count:Q"),
-            tooltip=["count"]
+            y="count:Q", tooltip=["count"]
         ).properties(height=400), use_container_width=True)
 
 with tabs[1]:
     st.altair_chart(
         alt.Chart(inst_df).mark_bar().encode(
             x=alt.X("instances:N", sort=INST_BINS),
-            y=alt.Y("count:Q"),
-            tooltip=["count"]
+            y="count:Q", tooltip=["count"]
         ).properties(height=400), use_container_width=True)
 
 with tabs[2]:
     st.altair_chart(
         alt.Chart(lib_df).mark_bar().encode(
             y=alt.Y("library:N", sort="-x"),
-            x=alt.X("count:Q"),
-            tooltip=["count"]
+            x="count:Q", tooltip=["count"]
         ).properties(height=600), use_container_width=True)
     st.dataframe(lib_df, use_container_width=True)
     st.download_button("CSV", lib_df.to_csv(index=False).encode(), "libraries.csv","text/csv")
@@ -309,8 +311,7 @@ with tabs[3]:
     st.altair_chart(
         alt.Chart(glob_df).mark_bar().encode(
             y=alt.Y("global:N", sort="-x"),
-            x=alt.X("count:Q"),
-            tooltip=["count"]
+            x="count:Q", tooltip=["count"]
         ).properties(height=500), use_container_width=True)
     st.dataframe(glob_df, use_container_width=True)
     st.download_button("CSV", glob_df.to_csv(index=False).encode(), "global_names.csv","text/csv")
@@ -326,7 +327,7 @@ with tabs[4]:
     st.altair_chart(
         alt.Chart(mdf.head(topN)).mark_bar().encode(
             y=alt.Y("Module:N", sort="-x"),
-            x=alt.X("Sites:Q"),
+            x="Sites:Q",
             tooltip=["Sites","Instances"]
         ).properties(height=600), use_container_width=True)
     st.dataframe(mdf, use_container_width=True)
