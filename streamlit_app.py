@@ -1,4 +1,5 @@
-# streamlit_app.py – Prebid Integration Monitor (raw JSON default, Voltax grouping)
+# streamlit_app.py – Prebid Integration Monitor
+# Default feed: prebid_combined.json  |  Groups Voltax globals
 
 import streamlit as st
 import pandas as pd
@@ -45,7 +46,7 @@ st.markdown(
 # -------------------------------------------------
 BASE = "https://raw.githubusercontent.com/prebid/prebid-integration-monitor/main/output/"
 RAW_JSON = BASE + "prebid_combined.json"
-RAW_JSON_GZ = RAW_JSON + ".gz"        # fallback gzip
+RAW_JSON_GZ = RAW_JSON + ".gz"
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Prebid-Integration-App"})
 
@@ -64,12 +65,11 @@ def slim_item(it: Dict[str, Any]) -> Dict[str, Any]:
 
     pb_instances = it.get("prebidInstances")
     if isinstance(pb_instances, list):
-        if not (modules and libraries and globals_):
-            for inst in pb_instances:
-                modules   += inst.get("modules" , [])
-                libraries += inst.get("libraries", [])
-                if inst.get("globalVarName"):
-                    globals_.append(inst["globalVarName"])
+        for inst in pb_instances:
+            modules   += inst.get("modules" , [])
+            libraries += inst.get("libraries", [])
+            gv = inst.get("globalVarName")
+            if gv: globals_.append(gv)
     else:
         pb_instances = [{}] * int(it.get("pb_inst", 0))
 
@@ -95,14 +95,13 @@ def dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen, out = set(), []
     for r in rows:
         if r["siteKey"] not in seen:
-            seen.add(r["siteKey"])
-            out.append(r)
+            seen.add(r["siteKey"]); out.append(r)
     return out
 
 # -------------------------------------------------
 # Compact ↔ slim helpers
 # -------------------------------------------------
-def _d(x):           # safe decode
+def _d(x):
     if pd.isna(x): return ""
     return x.decode() if isinstance(x, bytes) else str(x)
 
@@ -119,14 +118,14 @@ def compact_df_to_slim(df: pd.DataFrame) -> List[Dict[str, Any]]:
         })
     return rows
 
-def slim_to_df(rows: List[Dict[str, Any]]) -> pd.DataFrame]:
+def slim_to_df(rows: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame({
-        "siteKey":   [r["siteKey"] for r in rows],
-        "version":   [r["version"] for r in rows],
-        "modules":   ["|".join(r["modules"])   for r in rows],
-        "libraries": ["|".join(r["libraries"]) for r in rows],
-        "globals":   ["|".join(r["globals"])   for r in rows],
-        "pb_inst":   [len(r["prebidInstances"]) for r in rows],
+        "siteKey":[r["siteKey"] for r in rows],
+        "version":[r["version"] for r in rows],
+        "modules":["|".join(r["modules"]) for r in rows],
+        "libraries":["|".join(r["libraries"]) for r in rows],
+        "globals":["|".join(r["globals"]) for r in rows],
+        "pb_inst":[len(r["prebidInstances"]) for r in rows],
     })
 
 def read_compact(byts: bytes, name: str) -> List[Dict[str, Any]]:
@@ -151,7 +150,7 @@ def write_compact(rows):
     return buf.getvalue(), "prebid_compact.csv.gz", "application/gzip"
 
 # -------------------------------------------------
-# Default loader – raw JSON feed
+# Default loader – raw JSON
 # -------------------------------------------------
 @st.cache_data(show_spinner=True)
 def load_default():
@@ -192,11 +191,10 @@ if not rows:
     st.stop()
 
 # -------------------------------------------------
-# Voltax global grouping helper
+# Voltax global grouping
 # -------------------------------------------------
 _voltax_re = re.compile(r"^voltaxPlayerPrebid-[A-Za-z0-9-]{5,}$")
 def group_global(name: str) -> str:
-    return "voltaxPlayerPrebid-*"
     return "voltaxPlayerPrebid-*" if _voltax_re.match(name) else name
 
 # -------------------------------------------------
@@ -204,13 +202,7 @@ def group_global(name: str) -> str:
 # -------------------------------------------------
 rows_pb = [d for d in rows if d["version"] or d["prebidInstances"]]
 inst_total = sum(len(d["prebidInstances"]) for d in rows_pb)
-mod_total = 0
-for d in rows_pb:
-    if isinstance(d["prebidInstances"][0], dict) and d["prebidInstances"][0]:
-        for inst in d["prebidInstances"]:
-            mod_total += len(inst.get("modules", d["modules"]))
-    else:
-        mod_total += len(d["modules"]) * len(d["prebidInstances"])
+mod_total  = sum(len(d["modules"]) * (len(d["prebidInstances"]) or 1) for d in rows_pb)
 avg_mods = mod_total / inst_total if inst_total else 0
 
 c1,c2,c3,c4 = st.columns(4)
@@ -219,8 +211,7 @@ c2.metric("Sites w/ Prebid.js", f"{len(rows_pb):,}")
 c3.metric("Total Prebid instances", f"{inst_total:,}")
 c4.metric("Avg modules / instance", f"{avg_mods:.1f}")
 
-st.download_button("💾 Slim JSON", jdumps(rows),
-                   "prebid_slim.json","application/json")
+st.download_button("💾 Slim JSON", jdumps(rows), "prebid_slim.json","application/json")
 buf,name,mime = write_compact(rows)
 st.download_button("💾 Compact table", buf, name, mime)
 st.divider()
@@ -233,20 +224,22 @@ def cat_ver(v):
     try:
         m = int(re.split(r"[.-]", v)[0])
     except: return "Other"
-    if m <= 2: return "0.x-2.x"
-    if m <= 5: return "3.x-5.x"
-    if m <= 7: return "6.x-7.x"
-    if m == 8: return "8.x"
-    if m == 9: return "9.x"
-    if m == 10:return "10.x"
-    return "Other"
+    return (
+        "0.x-2.x" if m <= 2 else
+        "3.x-5.x" if m <= 5 else
+        "6.x-7.x" if m <= 7 else
+        "8.x"     if m == 8 else
+        "9.x"     if m == 9 else
+        "10.x"    if m == 10 else
+        "Other"
+    )
 
 def class_mod(m):
     m = m.lower()
-    if "bidadapter" in m:                    return "Bid Adapter"
-    if "rtdprovider" in m or "rtdmodule" in m:return "RTD Module"
-    if "idsystem" in m or "userid" in m:      return "ID System"
-    if "analytics" in m:                      return "Analytics Adapter"
+    if "bidadapter" in m:               return "Bid Adapter"
+    if "rtdprovider" in m or "rtdmodule" in m: return "RTD Module"
+    if "idsystem" in m or "userid" in m: return "ID System"
+    if "analytics" in m:                return "Analytics Adapter"
     return "Other"
 
 VER_ORDER = ["0.x-2.x","3.x-5.x","6.x-7.x","8.x","9.x","10.x","Other"]
@@ -260,11 +253,9 @@ inst_df = pd.Series(pd.cut([len(d["prebidInstances"]) for d in rows],
           .value_counts().reindex(INST_BINS, fill_value=0)\
           .reset_index(name="count").rename(columns={"index":"instances"})
 lib_df  = pd.Series([l for d in rows for l in d["libraries"]])\
-          .value_counts().reset_index(name="count")\
-          .rename(columns={"index":"library"})
+          .value_counts().reset_index(name="count").rename(columns={"index":"library"})
 glob_df = pd.Series([group_global(g) for d in rows for g in d["globals"]])\
-          .value_counts().reset_index(name="count")\
-          .rename(columns={"index":"global"})
+          .value_counts().reset_index(name="count").rename(columns={"index":"global"})
 
 def module_stats(data):
     site_ctr = {k: Counter() for k in ("Bid Adapter","RTD Module","ID System","Analytics Adapter","Other")}
@@ -327,8 +318,7 @@ with tabs[4]:
     st.altair_chart(
         alt.Chart(mdf.head(topN)).mark_bar().encode(
             y=alt.Y("Module:N", sort="-x"),
-            x="Sites:Q",
-            tooltip=["Sites","Instances"]
+            x="Sites:Q", tooltip=["Sites","Instances"]
         ).properties(height=600), use_container_width=True)
     st.dataframe(mdf, use_container_width=True)
     st.download_button("CSV", mdf.to_csv(index=False).encode(),
