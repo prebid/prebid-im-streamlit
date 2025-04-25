@@ -17,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# A touch of CSS polish 🧽
 st.markdown(
     """
     <style>
@@ -37,33 +36,56 @@ mpl.rcParams["mathtext.default"] = "regular"
 # -----------------------
 # 📦 Data‑loading helpers
 # -----------------------
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "Prebid-Integration-Monitor-App"})
 
 @st.cache_data(show_spinner=False)
 def load_json_from_url(url: str):
     """Download and return JSON list from a raw GitHub (or any) URL."""
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    return response.json()
+    resp = SESSION.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
 
-
-GITHUB_API_DIR = "https://api.github.com/repos/prebid/prebid-integration-monitor/contents/output?ref=jlist"
-RAW_BASE       = "https://raw.githubusercontent.com/prebid/prebid-integration-monitor/jlist/output"
+# GitHub API constants
+ORG  = "prebid"
+REPO = "prebid-integration-monitor"
+BRANCH = "jlist"
+API_BASE = f"https://api.github.com/repos/{ORG}/{REPO}/contents/output"
 
 @st.cache_data(show_spinner=True)
 def load_all_months():
-    """Combine *every* monthly results.json under /output/ into a single list."""
-    months_resp = requests.get(GITHUB_API_DIR, timeout=30)
-    months_resp.raise_for_status()
-    months = [item["name"] for item in months_resp.json() if item["type"] == "dir"]
+    """Walk every month directory under /output and merge all JSON files."""
+    top_resp = SESSION.get(f"{API_BASE}?ref={BRANCH}", timeout=30)
+    top_resp.raise_for_status()
+    months_meta = [item for item in top_resp.json() if item["type"] == "dir"]
 
-    data: list[dict] = []
-    for month in months:
-        url = f"{RAW_BASE}/{month}/results.json"
+    combined: list[dict] = []
+    for month in months_meta:
+        month_name = month["name"]
+        month_api_url = month["url"]  # API path for directory already includes branch ref
         try:
-            data.extend(load_json_from_url(url))
-        except Exception as err:
-            st.warning(f"Skipping {month}: {err}")
-    return data
+            dir_resp = SESSION.get(f"{month_api_url}?ref={BRANCH}", timeout=30)
+            dir_resp.raise_for_status()
+        except Exception as e:
+            st.warning(f"Skipping {month_name}: cannot list directory ({e})")
+            continue
+
+        files_meta = dir_resp.json()
+        # Prefer a single results.json if present
+        results_meta = next((f for f in files_meta if f["type"] == "file" and f["name"] == "results.json"), None)
+        target_files = [results_meta] if results_meta else [f for f in files_meta if f["type"] == "file" and f["name"].endswith(".json")]
+
+        for fmeta in target_files:
+            raw_url = fmeta["download_url"]
+            if not raw_url:
+                # fallback to raw path construction
+                path = fmeta["path"]  # e.g., output/Mar/2025-03-01.json
+                raw_url = f"https://raw.githubusercontent.com/{ORG}/{REPO}/{BRANCH}/{path}"
+            try:
+                combined.extend(load_json_from_url(raw_url))
+            except Exception as err:
+                st.warning(f"Skipping {fmeta['name']} in {month_name}: {err}")
+    return combined
 
 
 def load_uploaded_json(file):
@@ -159,7 +181,9 @@ INSTANCE_LABELS = ["0", "1", "2", "3", "4", "5", "6+"]
 
 @st.cache_data(show_spinner=False)
 def build_version_df(data):
-    buckets = list(chain.from_iterable(categorize_version(v) for v in chain.from_iterable(extract_versions(i) for i in data)))
+    buckets = list(chain.from_iterable(
+        categorize_version(v) for v in chain.from_iterable(extract_versions(i) for i in data)
+    ))
     df = pd.DataFrame({"bucket": buckets})
     counts = df["bucket"].value_counts().reindex(VERSION_ORDER, fill_value=0).reset_index()
     counts.columns = ["bucket", "count"]
@@ -216,7 +240,7 @@ def build_module_stats(data):
 st.sidebar.header("Data source")
 load_mode = st.sidebar.radio("Choose dataset", ("All historical months (default)", "Single feed URL"))
 
-DEFAULT_SINGLE_URL = "https://raw.githubusercontent.com/prebid/prebid-integration-monitor/main/output/results.json"
+DEFAULT_SINGLE_URL = f"https://raw.githubusercontent.com/{ORG}/{REPO}/{BRANCH}/output/results.json"
 json_url = st.sidebar.text_input("Single JSON URL", value=DEFAULT_SINGLE_URL, disabled=(load_mode.startswith("All")))
 
 uploaded_file = st.sidebar.file_uploader("…or upload a JSON file", type="json")
@@ -251,142 +275,4 @@ if not data:
 # -----------------------
 
 site_count = len(data)
-sites_with_prebid = sum(1 for i in data if count_prebid_instances(i) > 0)
-total_instances = sum(count_prebid_instances(i) for i in data)
-avg_modules = sum(len(extract_modules(i)) for i in data) / max(total_instances, 1)
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total sites scanned", f"{site_count:,}")
-col2.metric("Sites w/ Prebid.js", f"{sites_with_prebid:,}")
-col3.metric("Total Prebid instances", f"{total_instances:,}")
-col4.metric("Avg modules / instance", f"{avg_modules:.1f}")
-
-st.divider()
-
-# -----------------------
-# 📊 Build DataFrames
-# -----------------------
-
-version_df  = build_version_df(data)
-instance_df = build_instance_df(data)
-library_df  = build_library_df(data)
-global_df   = build_globalname_df(data)
-module_site_counter, module_inst_counter, _ = build_module_stats(data)
-
-# -----------------------
-# 🗂️  Tabs for exploration
-# -----------------------
-
-tabs = st.tabs(["Versions", "Instances/site", "Libraries", "Global names", "Modules"])
-
-# --- Versions
-with tabs[0]:
-    st.subheader("Prebid.js version buckets")
-    chart = (
-        alt.Chart(version_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("bucket:N", sort=VERSION_ORDER, title="Version bucket"),
-            y=alt.Y("count:Q", title="Number of occurrences"),
-            tooltip=["count"]
-        )
-        .properties(height=400)
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-# --- Instances per site
-with tabs[1]:
-    st.subheader("Distribution of Prebid instances per site")
-    chart = (
-        alt.Chart(instance_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("instances:N", sort=INSTANCE_LABELS, title="Instances"),
-            y=alt.Y("count:Q", title="Number of sites"),
-            tooltip=["count"]
-        )
-        .properties(height=400)
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-# --- Libraries
-with tabs[2]:
-    st.subheader("Popularity of external libraries")
-    top_n = st.slider("Show top N", 10, 100, 30, 5)
-    chart = (
-        alt.Chart(library_df.head(top_n))
-        .mark_bar()
-        .encode(
-            y=alt.Y("library:N", sort="-x", title="Library"),
-            x=alt.X("count:Q", title="Sites"),
-            tooltip=["count"]
-        )
-        .properties(height=600)
-    )
-    st.altair_chart(chart, use_container_width=True)
-    with st.expander("Raw library table & download"):
-        st.dataframe(library_df, use_container_width=True)
-        st.download_button("Download CSV", library_df.to_csv(index=False).encode("utf-8"), "libraries.csv", "text/csv")
-
-# --- Global names
-with tabs[3]:
-    st.subheader("Popularity of global Prebid object names")
-    chart = (
-        alt.Chart(global_df)
-        .mark_bar()
-        .encode(
-            y=alt.Y("global:N", sort="-x", title="Global object name"),
-            x=alt.X("count:Q", title="Sites"),
-            tooltip=["count"]
-        )
-        .properties(height=500)
-    )
-    st.altair_chart(chart, use_container_width=True)
-    with st.expander("Raw global‑name table & download"):
-        st.dataframe(global_df, use_container_width=True)
-        st.download_button("Download CSV", global_df.to_csv(index=False).encode("utf-8"), "global_names.csv", "text/csv")
-
-# --- Modules
-with tabs[4]:
-    st.subheader("Module popularity – select category")
-    category = st.selectbox("Module category", list(module_site_counter.keys()))
-    top_n = st.slider("Bar‑chart: top N", 5, 100, 20, 5, key="mod_topn")
-
-    # full dataframe (not truncated) for table/download
-    full_df = pd.DataFrame({
-        "Module": list(module_site_counter[category].keys()),
-        "Sites": list(module_site_counter[category].values()),
-        "Instances": [module_inst_counter[category][m] for m in module_site_counter[category].keys()],
-    }).sort_values("Sites", ascending=False).reset_index(drop=True)
-
-    bar_df = full_df.head(top_n)
-
-    chart = (
-        alt.Chart(bar_df)
-        .mark_bar()
-        .encode(
-            y=alt.Y("Module:N", sort="-x"),
-            x=alt.X("Sites:Q"),
-            tooltip=["Sites", "Instances"]
-        )
-        .properties(height=600)
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-    with st.expander("Raw module table & download"):
-        st.dataframe(full_df, use_container_width=True)
-        st.download_button(
-            "Download CSV",
-            full_df.to_csv(index=False).encode("utf-8"),
-            f"modules_{category.replace(' ', '_').lower()}.csv",
-            "text/csv",
-        )
-
-# -----------------------
-# 🤝 Footer
-# -----------------------
-
-st.markdown(
-    "<br><center>Reach out with feedback 👉 <a href='mailto:support@prebid.org'>support@prebid.org</a></center>",
-    unsafe_allow_html=True,
-)
+sites_with_prebid = sum(1 for i in data if count_prebid_instances
