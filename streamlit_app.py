@@ -259,22 +259,12 @@ glob_df=pd.Series([g for d in rows for g in d["globals"]])\
         .value_counts().reset_index(name="count")\
         .rename(columns={"index":"global"})
 
-def module_stats(rows):
-    site_ctr = {k: Counter() for k in
-                ("Bid Adapter", "RTD Module", "ID System",
-                 "Analytics Adapter", "Other")}
-    inst_ctr = {k: Counter() for k in site_ctr}
-
-    for d in rows:
-        mods_here   = set(d["modules"])
-        inst_count  = len(d["prebidInstances"]) or 1  # 1 if we only know version
-
-        for m in mods_here:
-            cat = class_mod(m)
-            site_ctr[cat][m] += 1
-            inst_ctr[cat][m] += inst_count            # ⭐ add *all* instances
-
-    return site_ctr, inst_ctr
+def module_stats(data):
+     site,inst={k:Counter() for k in ("Bid Adapter","RTD Module","ID System","Analytics Adapter","Other")},{k:Counter() for k in ("Bid Adapter","RTD Module","ID System","Analytics Adapter","Other")}
+     for d in data:
+         for m in set(d["modules"]): site[class_mod(m)][m]+=1
+         for m in d["modules"]:      inst[class_mod(m)][m]+=1
+     return site,inst
 
 
 mod_site,mod_inst=module_stats(rows)
