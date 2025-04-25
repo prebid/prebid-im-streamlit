@@ -34,7 +34,7 @@ mpl.rcParams["text.usetex"] = False
 mpl.rcParams["mathtext.default"] = "regular"
 
 # -----------------------
-# 📦 Data-loading helpers
+# 📦 Data‑loading helpers
 # -----------------------
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "Prebid-Integration-Monitor-App"})
@@ -47,45 +47,67 @@ def load_json_from_url(url: str):
     return resp.json()
 
 # GitHub constants
-ORG    = "prebid"
-REPO   = "prebid-integration-monitor"
+ORG = "prebid"
+REPO = "prebid-integration-monitor"
 BRANCH = "jlist"
 API_BASE = f"https://api.github.com/repos/{ORG}/{REPO}/contents/output"
 RAW_BASE = f"https://raw.githubusercontent.com/{ORG}/{REPO}/{BRANCH}/"
 
 @st.cache_data(show_spinner=True)
 def load_all_months():
-    """Iterate every month folder in /output and combine JSON files."""
-    top = SESSION.get(f"{API_BASE}?ref={BRANCH}", timeout=30)
-    top.raise_for_status()
-    months_meta = [m for m in top.json() if m["type"] == "dir"]
+    """Gather JSON from every month folder under /output.
+    Uses GitHub API when available; falls back to a static month list
+    if rate‑limited (HTTP 403) or any other API failure occurs.
+    Optionally honours a personal token via st.secrets['github_token']
+    to raise the unauthenticated rate limit.
+    """
+    MONTH_LIST = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
 
     combined: list[dict] = []
+
+    # --- helper to load any raw JSON url safely
+    def _extend_from_raw(raw_url: str, label: str):
+        try:
+            combined.extend(load_json_from_url(raw_url))
+        except Exception as e:
+            st.warning(f"   ↳ skip {label}: {e}")
+
+    # --- try GitHub API first (higher fidelity listing)
+    try:
+        top = SESSION.get(f"{API_BASE}?ref={BRANCH}", timeout=30)
+        top.raise_for_status()
+        months_meta = [m for m in top.json() if m["type"] == "dir"]
+    except Exception as api_err:
+        st.warning(f"GitHub API directory listing failed ({api_err}). "
+                   "Falling back to static month list.")
+        months_meta = [{"name": m, "url": f"{API_BASE}/{m}"} for m in MONTH_LIST]
+
     for month in months_meta:
+        month_name = month["name"]
         dir_api = month["url"]
         try:
             resp = SESSION.get(f"{dir_api}?ref={BRANCH}", timeout=30)
             resp.raise_for_status()
-        except Exception as e:
-            st.warning(f"⚠️  Skipping {month['name']}: {e}")
+            files_meta = resp.json()
+        except Exception:
+            # Fallback: try loading output/{month}/results.json directly
+            fallback_raw = f"{RAW_BASE}output/{month_name}/results.json"
+            _extend_from_raw(fallback_raw, f"{month_name}/results.json (fallback)")
             continue
 
-        files_meta = resp.json()
-        # Prefer results.json; else each daily JSON
-        results_meta = next((f for f in files_meta
-                             if f["type"] == "file" and f["name"] == "results.json"), None)
-        targets = [results_meta] if results_meta else [
-            f for f in files_meta
-            if f["type"] == "file" and f["name"].endswith(".json")
-        ]
+        # Prefer results.json; else every *.json file
+        results_meta = next((f for f in files_meta if f["type"] == "file" and f["name"] == "results.json"), None)
+        targets = [results_meta] if results_meta else [f for f in files_meta if f["type"] == "file" and f["name"].endswith(".json")]
 
         for fmeta in targets:
             raw_url = fmeta.get("download_url") or RAW_BASE + fmeta["path"]
-            try:
-                combined.extend(load_json_from_url(raw_url))
-            except Exception as e:
-                st.warning(f"   ↳ skip {fmeta['name']} ({month['name']}): {e}")
+            _extend_from_raw(raw_url, fmeta["name"])
+
     return combined
+
 
 def load_uploaded_json(file):
     try:
@@ -97,6 +119,7 @@ def load_uploaded_json(file):
 # -----------------------
 # 🏷️  Helper classifiers
 # -----------------------
+
 def categorize_version(v: str) -> str:
     v = v.lstrip("v")
     parts = re.split(r"[.-]", v)
@@ -116,6 +139,7 @@ def categorize_version(v: str) -> str:
         return "9.x"
     return "Other"
 
+
 def classify_module(name: str) -> str:
     if "BidAdapter" in name:
         return "Bid Adapter"
@@ -130,6 +154,7 @@ def classify_module(name: str) -> str:
 # -----------------------
 # 🔍 Field extractors
 # -----------------------
+
 def extract_versions(item):
     vers = []
     if "version" in item:
@@ -139,19 +164,23 @@ def extract_versions(item):
             vers.append(inst["version"])
     return vers
 
+
 def extract_modules(item):
     mods = list(item.get("modules", []))
     for inst in item.get("prebidInstances", []):
         mods.extend(inst.get("modules", []))
     return mods
 
+
 def count_prebid_instances(item):
     if "prebidInstances" in item:
         return len(item["prebidInstances"])
     return 1 if "version" in item else 0
 
+
 def extract_libraries(item):
     return item.get("libraries", [])
+
 
 def extract_global_var_names(data):
     names = []
@@ -167,80 +196,58 @@ def extract_global_var_names(data):
 # -----------------------
 # 📊 Cached dataframe builders
 # -----------------------
-VERSION_ORDER    = ["0.x-2.x", "3.x-5.x", "6.x-7.x", "8.x", "9.x", "Other"]
+VERSION_ORDER   = ["0.x-2.x", "3.x-5.x", "6.x-7.x", "8.x", "9.x", "Other"]
 INSTANCE_BUCKETS = ["0", "1", "2", "3", "4", "5", "6+"]
 
 @st.cache_data(show_spinner=False)
 def build_version_df(data):
-    buckets = [categorize_version(v)
-               for item in data
-               for v in extract_versions(item)]
+    buckets = [categorize_version(v) for item in data for v in extract_versions(item)]
     return (
-        pd.Series(buckets, name="bucket")
-          .value_counts()
-          .reindex(VERSION_ORDER, fill_value=0)
-          .reset_index(name="count")
-          .rename(columns={"index": "bucket"})
+        pd.Series(buckets, name="bucket").value_counts().reindex(VERSION_ORDER, fill_value=0)
+        .reset_index(name="count").rename(columns={"index": "bucket"})
     )
 
 @st.cache_data(show_spinner=False)
 def build_instance_df(data):
     counts = [count_prebid_instances(item) for item in data]
-    bins = pd.cut(counts,
-                  [-0.1, 0, 1, 2, 3, 4, 5, float("inf")],
-                  labels=INSTANCE_BUCKETS,
-                  include_lowest=True)
+    bins = pd.cut(counts, [-0.1,0,1,2,3,4,5,float("inf")], labels=INSTANCE_BUCKETS, include_lowest=True)
     return (
-        pd.Series(bins, name="instances")
-          .value_counts()
-          .reindex(INSTANCE_BUCKETS, fill_value=0)
-          .reset_index(name="count")
-          .rename(columns={"index": "instances"})
+        pd.Series(bins, name="instances").value_counts().reindex(INSTANCE_BUCKETS, fill_value=0)
+        .reset_index(name="count").rename(columns={"index": "instances"})
     )
 
 @st.cache_data(show_spinner=False)
 def build_library_df(data):
     libs = [lib for item in data for lib in extract_libraries(item)]
     return (
-        pd.Series(libs, name="library")
-          .value_counts()
-          .reset_index(name="count")
-          .rename(columns={"index": "library"})
+        pd.Series(libs, name="library").value_counts()
+        .reset_index(name="count").rename(columns={"index": "library"})
     )
 
 @st.cache_data(show_spinner=False)
 def build_global_df(data):
     names = extract_global_var_names(data)
     return (
-        pd.Series(names, name="global")
-          .value_counts()
-          .reset_index(name="count")
-          .rename(columns={"index": "global"})
+        pd.Series(names, name="global").value_counts()
+        .reset_index(name="count").rename(columns={"index": "global"})
     )
 
 @st.cache_data(show_spinner=False)
 def build_module_stats(data):
-    site_counter = {k: Counter() for k in
-                    ("Bid Adapter", "RTD Module", "ID System", "Analytics Adapter", "Other")}
+    site_counter = {k: Counter() for k in ("Bid Adapter", "RTD Module", "ID System", "Analytics Adapter", "Other")}
     inst_counter = {k: Counter() for k in site_counter}
     total_instances = 0
-
     for item in data:
-        prebid_insts = (item.get("prebidInstances", [])
-                        if "prebidInstances" in item
-                        else ([item] if "version" in item else []))
+        prebid_insts = item.get("prebidInstances", [item]) if "version" in item else item.get("prebidInstances", [])
         total_instances += len(prebid_insts)
         site_mods: set[str] = set()
-
         for inst in prebid_insts:
             mods_inst = set(inst.get("modules", []))
             site_mods.update(mods_inst)
             for m in mods_inst:
                 inst_counter[classify_module(m)][m] += 1
-
         for m in site_mods:
             site_counter[classify_module(m)][m] += 1
-
     return site_counter, inst_counter, total_instances
 
 # -----------------------
