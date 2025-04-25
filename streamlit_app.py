@@ -86,11 +86,14 @@ def load_all_months():
 
     for month in months_meta:
         month_name = month["name"]
-        dir_api = month["url"]
+        dir_api    = month["url"]  # already contains ?ref=jlist
         try:
-            resp = SESSION.get(f"{dir_api}?ref={BRANCH}", timeout=30)
+            resp = SESSION.get(dir_api, timeout=30)
             resp.raise_for_status()
             files_meta = resp.json()
+        except Exception as e:
+            st.warning(f"⚠️  Cannot list {month_name}: {e}")
+            continue
         except Exception as e:
             st.warning(f"⚠️  Cannot list {month_name}: {e}")
             continue
